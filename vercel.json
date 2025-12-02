@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/players.js": {
+      "maxDuration": 10
+    }
+  }
+}
