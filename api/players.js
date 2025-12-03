@@ -1,4 +1,4 @@
-// api/players.js  -- Location: /api/players.js (Node handler file)
+// api/players.js -- Location: /api/players.js (Node handler file)
 
 // Simple CORS wrapper so any frontend can call this endpoint safely
 const allowCors = (fn) => async (req, res) => {
@@ -23,9 +23,16 @@ const allowCors = (fn) => async (req, res) => {
 
 // In-memory rate limiting (per serverless instance) with temporary IP block
 // Rule: If more than 10 requests in 10 seconds from same IP -> block for 1 hour.
-const RATE_LIMIT_WINDOW_MS = 10 * 1000;       // 10 second window
-const RATE_LIMIT_MAX_REQUESTS = 10;           // Max 10 requests per window
-const RATE_LIMIT_BLOCK_MS = 60 * 60 * 1000;   // 1 hour block duration
+const RATE_LIMIT_WINDOW_MS = 10 * 1000; // 10 second window
+const RATE_LIMIT_MAX_REQUESTS = 10; // Max 10 requests per window
+const RATE_LIMIT_BLOCK_MS = 60 * 60 * 1000; // 1 hour block duration
+
+// In-memory Redis usage cache (per serverless instance)
+// This reduces how often we actually call Redis.
+const REDIS_CACHE_TTL_MS = 100 * 1000; // 100 second backend cache
+
+let cachedRedisResult = null; // { playing, peak24h, peak7d, updatedAt, cachedAtMs }
+let lastRedisComputeTime = 0;
 
 // Map: ip -> { count, windowStart, blockedUntil }
 const rateLimitState = new Map();
@@ -82,6 +89,13 @@ const rateLimitCheck = (ip) => {
   return { allowed: true, blocked: false, retryAfterSeconds: 0 };
 };
 
+// Helper to decide whether to recompute peaks from Redis or reuse cache
+const shouldUseRedisCache = () => {
+  const now = Date.now();
+  const age = now - lastRedisComputeTime;
+  return cachedRedisResult && age < REDIS_CACHE_TTL_MS;
+};
+
 const handler = async (req, res) => {
   // --- Rate limiting block (runs before any external calls) ---
   try {
@@ -133,6 +147,20 @@ const handler = async (req, res) => {
   let peak7d = 0;
 
   try {
+    // If we have a fresh Redis-backed cache, return it immediately
+    if (shouldUseRedisCache()) {
+      console.warn('⚠️ Using in-memory Redis cache for /api/players response');
+      const { playing, peak24h, peak7d, updatedAt } = cachedRedisResult;
+      res.status(200).json({
+        playing,
+        peak24h,
+        peak7d,
+        updatedAt,
+        cache: 'memory-100s', // small hint for debugging frontend, optional
+      });
+      return;
+    }
+
     // Fetch current player count from Roblox API
     const response = await fetch(
       'https://games.roblox.com/v1/games?universeIds=8779464785'
@@ -317,12 +345,26 @@ const handler = async (req, res) => {
       peak7d = currentPlayers;
     }
 
+    const updatedAt = new Date().toISOString();
+
+    // Update in-memory Redis-backed cache with fresh values
+    cachedRedisResult = {
+      playing: currentPlayers,
+      peak24h,
+      peak7d,
+      updatedAt,
+      cachedAtMs: Date.now(),
+    };
+    lastRedisComputeTime = Date.now();
+    console.warn('⚠️ Updated in-memory Redis cache for /api/players');
+
     // Success response back to client
     res.status(200).json({
       playing: currentPlayers,
       peak24h,
       peak7d,
-      updatedAt: new Date().toISOString(),
+      updatedAt,
+      cache: 'fresh', // small hint for debugging
     });
   } catch (err) {
     // Top-level catch for Roblox or other unexpected errors
@@ -342,4 +384,4 @@ const handler = async (req, res) => {
 
 module.exports = allowCors(handler);
 
-// api/players.js  -- Location: /api/players.js (Node handler file)
+// api/players.js -- Location: /api/players.js (Node handler file)
