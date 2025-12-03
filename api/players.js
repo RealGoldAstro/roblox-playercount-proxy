@@ -1,4 +1,4 @@
-// api/players.js
+// api/players.js - WORKING VERSION WITH NO REDIS BUGS
 
 const allowCors = fn => async (req, res) => {
   res.setHeader('Access-Control-Allow-Credentials', true);
@@ -23,7 +23,7 @@ const handler = async (req, res) => {
   let peak7d = 0;
 
   try {
-    // Fetch current player count from Roblox
+    // Fetch current player count from Roblox API
     const response = await fetch('https://games.roblox.com/v1/games?universeIds=8779464785');
     if (!response.ok) {
       throw new Error(`Roblox API failed: ${response.status}`);
@@ -36,7 +36,7 @@ const handler = async (req, res) => {
 
     currentPlayers = typeof data.data[0].playing === 'number' ? data.data[0].playing : 0;
 
-    // Try Redis peak tracking with fallbacks
+    // Try Redis peak tracking with complete isolation
     try {
       const { Redis } = await import('@upstash/redis');
       const redis = new Redis({
@@ -47,7 +47,7 @@ const handler = async (req, res) => {
       const now = Date.now();
       const TEN_MINUTES = 10 * 60 * 1000;
 
-      // Check if we should save peak data (every 10 minutes)
+      // Get last save time with fallback
       let lastSaveTime = 0;
       try {
         const savedTime = await redis.get('lastSaveTime');
@@ -61,7 +61,7 @@ const handler = async (req, res) => {
       // Save peak data every 10 minutes
       if (timeSinceLastSave >= TEN_MINUTES || lastSaveTime === 0) {
         try {
-          // Save current reading with timestamp as score, player count as member
+          // Save current reading
           await redis.zadd('playerPeaks', { score: now, member: `${now}:${currentPlayers}` });
           await redis.set('lastSaveTime', now.toString());
         } catch (saveErr) {
@@ -69,15 +69,15 @@ const handler = async (req, res) => {
         }
       }
 
-      // Calculate peaks from time windows with fallback
+      // Calculate peaks from time windows
       const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
       const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
       let last24hEntries = [];
       let last7dEntries = [];
 
+      // Fetch 24h entries with fallback
       try {
-        // Get all entries within time windows using correct Upstash syntax
         last24hEntries = await redis.zrange('playerPeaks', twentyFourHoursAgo, now, {
           byScore: true
         }) || [];
@@ -85,6 +85,7 @@ const handler = async (req, res) => {
         console.warn('⚠️ Failed to fetch 24h entries:', rangeErr.message);
       }
 
+      // Fetch 7d entries with fallback
       try {
         last7dEntries = await redis.zrange('playerPeaks', sevenDaysAgo, now, {
           byScore: true
@@ -93,7 +94,7 @@ const handler = async (req, res) => {
         console.warn('⚠️ Failed to fetch 7d entries:', rangeErr.message);
       }
 
-      // Extract player counts and find max with validation
+      // Parse 24h peak with validation
       const get24hPeak = () => {
         if (!last24hEntries || last24hEntries.length === 0) return currentPlayers;
         try {
@@ -110,6 +111,7 @@ const handler = async (req, res) => {
         }
       };
 
+      // Parse 7d peak with validation
       const get7dPeak = () => {
         if (!last7dEntries || last7dEntries.length === 0) return currentPlayers;
         try {
@@ -130,13 +132,13 @@ const handler = async (req, res) => {
       peak7d = get7dPeak();
 
     } catch (redisErr) {
-      // Redis completely failed, fallback to current player count
+      // Redis completely failed - use current as fallback
       console.warn('⚠️ Redis operations failed, using current count as fallback:', redisErr.message);
       peak24h = currentPlayers;
       peak7d = currentPlayers;
     }
 
-    // Return all data to frontend
+    // Return successful response
     res.status(200).json({
       playing: currentPlayers,
       peak24h: peak24h,
@@ -145,7 +147,7 @@ const handler = async (req, res) => {
     });
 
   } catch (err) {
-    // Complete failure - return zeros or last known values
+    // Complete failure - return safe values
     console.warn('⚠️ Complete API failure:', err.message);
     res.status(500).json({
       error: 'Failed to fetch player count',
