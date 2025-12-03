@@ -54,7 +54,6 @@ const handler = async (req, res) => {
       
       // Cleanup: Remove entries older than 7 days
       const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-      await redis.zremrangebyscore('playerPeaks', 0, sevenDaysAgo);
     }
 
     // Calculate peaks from time windows
