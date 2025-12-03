@@ -62,8 +62,14 @@ const handler = async (req, res) => {
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
     // Get all entries within time windows
-    const last24hEntries = await redis.zrangebyscore('playerPeaks', twentyFourHoursAgo, now) || [];
-    const last7dEntries = await redis.zrangebyscore('playerPeaks', sevenDaysAgo, now) || [];
+    const last24hEntries = await redis.zrange('playerPeaks', twentyFourHoursAgo, now, {
+      byScore: true
+    });
+    
+    const last7dEntries = await redis.zrange('playerPeaks', sevenDaysAgo, now, {
+      byScore: true
+    });
+    
 
     // Extract player counts and find max
     const get24hPeak = () => {
