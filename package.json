@@ -1,7 +1,11 @@
 {
-  "name": "player-count-tracker",
+  "name": "roblox-playercount-proxy",
   "version": "1.0.0",
+  "description": "Roblox player count tracker with 24h and 7d peaks",
   "dependencies": {
-    "@vercel/kv": "^1.0.1"
+    "@upstash/redis": "^1.28.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
