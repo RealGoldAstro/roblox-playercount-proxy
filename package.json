@@ -1,3 +1,15 @@
-"engines": {
-  "node": "24.x"
+{
+  "name": "roblox-playercount-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node api/players.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.31.6",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": "24.x"
+  }
 }
