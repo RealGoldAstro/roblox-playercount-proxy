@@ -1,7 +1,15 @@
 {
-  "functions": {
-    "api/players.js": {
-      "maxDuration": 10
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/players.js",
+      "use": "@vercel/node"
     }
-  }
+  ],
+  "routes": [
+    {
+      "src": "/api/players",
+      "dest": "/api/players.js"
+    }
+  ]
 }
