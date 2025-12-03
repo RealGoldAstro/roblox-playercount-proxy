@@ -1,11 +1,16 @@
 {
   "name": "roblox-playercount-proxy",
   "version": "1.0.0",
-  "description": "Roblox player count tracker with 24h and 7d peaks",
+  "private": true,
+  "scripts": {
+    "dev": "node api/players.js",
+    "start": "node api/players.js"
+  },
   "dependencies": {
-    "@upstash/redis": "^1.28.0"
+    "@upstash/redis": "^1.31.6",
+    "node-fetch": "^3.3.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
