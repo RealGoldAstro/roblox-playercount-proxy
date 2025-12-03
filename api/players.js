@@ -21,7 +21,113 @@ const allowCors = (fn) => async (req, res) => {
   return fn(req, res);
 };
 
+// In-memory rate limiting (per serverless instance) with temporary IP block
+// Rule: If more than 10 requests in 10 seconds from same IP -> block for 1 hour.
+const RATE_LIMIT_WINDOW_MS = 10 * 1000;       // 10 second window
+const RATE_LIMIT_MAX_REQUESTS = 10;           // Max 10 requests per window
+const RATE_LIMIT_BLOCK_MS = 60 * 60 * 1000;   // 1 hour block duration
+
+// Map: ip -> { count, windowStart, blockedUntil }
+const rateLimitState = new Map();
+
+const rateLimitCheck = (ip) => {
+  const now = Date.now();
+  const current = rateLimitState.get(ip);
+
+  // If IP is currently blocked, check if block expired
+  if (current && current.blockedUntil && now < current.blockedUntil) {
+    // Still blocked
+    return {
+      allowed: false,
+      blocked: true,
+      retryAfterSeconds: Math.ceil((current.blockedUntil - now) / 1000),
+    };
+  } else if (current && current.blockedUntil && now >= current.blockedUntil) {
+    // Block expired, reset state
+    rateLimitState.delete(ip);
+  }
+
+  const existing = rateLimitState.get(ip);
+
+  // Start a new window if none exists or window expired
+  if (!existing || now - existing.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateLimitState.set(ip, {
+      count: 1,
+      windowStart: now,
+      blockedUntil: null,
+    });
+    return { allowed: true, blocked: false, retryAfterSeconds: 0 };
+  }
+
+  // Increment count within current window
+  existing.count += 1;
+
+  if (existing.count > RATE_LIMIT_MAX_REQUESTS) {
+    // Exceeded limit: block IP for 1 hour
+    const blockedUntil = now + RATE_LIMIT_BLOCK_MS;
+    existing.blockedUntil = blockedUntil;
+    console.warn(
+      '⚠️ Rate limit triggered. Blocking IP for 1 hour:',
+      ip,
+      'requests in window:',
+      existing.count
+    );
+    return {
+      allowed: false,
+      blocked: true,
+      retryAfterSeconds: Math.ceil(RATE_LIMIT_BLOCK_MS / 1000),
+    };
+  }
+
+  return { allowed: true, blocked: false, retryAfterSeconds: 0 };
+};
+
 const handler = async (req, res) => {
+  // --- Rate limiting block (runs before any external calls) ---
+  try {
+    const ip =
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+      req.socket?.remoteAddress ||
+      'unknown';
+
+    const rl = rateLimitCheck(ip);
+
+    if (!rl.allowed) {
+      if (rl.blocked) {
+        console.warn(
+          '⚠️ Blocked IP tried to access /api/players:',
+          ip,
+          '- still under 1 hour block'
+        );
+      } else {
+        console.warn(
+          '⚠️ Rate limit exceeded for IP (pre-block stage):',
+          ip,
+          '- denying request'
+        );
+      }
+
+      // Tell client when to try again
+      if (rl.retryAfterSeconds > 0) {
+        res.setHeader('Retry-After', rl.retryAfterSeconds);
+      }
+
+      res.status(429).json({
+        error: 'Too Many Requests',
+        message:
+          'Rate limit exceeded for this IP. You are temporarily blocked due to excessive requests.',
+      });
+      return;
+    }
+  } catch (rateErr) {
+    console.warn(
+      '⚠️ Rate limiting check failed, allowing request anyway:',
+      rateErr && rateErr.message ? rateErr.message : rateErr
+    );
+    // Allow request to continue if limiter logic itself fails
+  }
+  // --- End rate limiting block ---
+
   let currentPlayers = 0;
   let peak24h = 0;
   let peak7d = 0;
