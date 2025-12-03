@@ -32,33 +32,38 @@ const handler = async (req, res) => {
 
     const currentPlayers = typeof data.data[0].playing === 'number' ? data.data[0].playing : 0;
     
-    // Import KV client (Vercel KV)
-    const { kv } = await import('@vercel/kv');
+    // Import Upstash Redis client
+    const { Redis } = await import('@upstash/redis');
+    const redis = new Redis({
+      url: process.env.KV_REST_API_URL,
+      token: process.env.KV_REST_API_TOKEN,
+    });
+
     const now = Date.now();
     
     // Check if we should save peak data (every 10 minutes)
-    const lastSaveTime = await kv.get('lastSaveTime') || 0;
+    const lastSaveTime = await redis.get('lastSaveTime') || 0;
     const timeSinceLastSave = now - lastSaveTime;
     const TEN_MINUTES = 10 * 60 * 1000;
 
     // Save peak data every 10 minutes
     if (timeSinceLastSave >= TEN_MINUTES || lastSaveTime === 0) {
-      // Save current reading with timestamp as score
-      await kv.zadd('playerPeaks', { score: now, member: `${now}:${currentPlayers}` });
-      await kv.set('lastSaveTime', now);
+      // Save current reading with timestamp as score, player count as member
+      await redis.zadd('playerPeaks', { score: now, member: `${now}:${currentPlayers}` });
+      await redis.set('lastSaveTime', now);
       
       // Cleanup: Remove entries older than 7 days
       const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-      await kv.zremrangebyscore('playerPeaks', 0, sevenDaysAgo);
+      await redis.zremrangebyscore('playerPeaks', 0, sevenDaysAgo);
     }
 
-    // Calculate peaks
+    // Calculate peaks from time windows
     const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
     const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
 
     // Get all entries within time windows
-    const last24hEntries = await kv.zrangebyscore('playerPeaks', twentyFourHoursAgo, now);
-    const last7dEntries = await kv.zrangebyscore('playerPeaks', sevenDaysAgo, now);
+    const last24hEntries = await redis.zrangebyscore('playerPeaks', twentyFourHoursAgo, now) || [];
+    const last7dEntries = await redis.zrangebyscore('playerPeaks', sevenDaysAgo, now) || [];
 
     // Extract player counts and find max
     const get24hPeak = () => {
@@ -76,7 +81,7 @@ const handler = async (req, res) => {
     const peak24h = get24hPeak();
     const peak7d = get7dPeak();
 
-    // Return all data
+    // Return all data to frontend
     res.status(200).json({
       playing: currentPlayers,
       peak24h: peak24h,
